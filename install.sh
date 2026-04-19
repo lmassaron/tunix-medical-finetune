@@ -196,7 +196,7 @@ elif [ "$HAS_NVIDIA_GPU" = true ]; then
     # available on the standard index for cu121, cu124, cu128.
     # We do NOT force cu130 here since those wheels may not exist yet.
     if [ "$CUDA_MAJOR" -ge 13 ]; then
-        PT_CU_VERSION="cu128"   # fall back to cu128 until cu130 wheels land broadly
+        PT_CU_VERSION="cu130"
         JAX_CUDA_TAG="cuda13"
     elif [ "$CUDA_MAJOR" -eq 12 ]; then
         if [ "$CUDA_MINOR" -ge 8 ]; then
@@ -224,16 +224,23 @@ elif [ "$HAS_NVIDIA_GPU" = true ]; then
     echo ">>> Selected PyTorch CUDA index : $PT_CU_VERSION"
     echo ">>> Selected JAX CUDA tag       : $JAX_CUDA_TAG"
 
-    # Install PyTorch using the dynamically selected index.
-    # We do NOT pin a specific torch version — we take the latest stable
-    # wheel available for the detected CUDA index.  The old pin
-    # (torch==2.10.0+cu130) was incorrect and caused install failures on
-    # CUDA 12.x systems, including DGX Spark (aarch64 + CUDA 12.8).
+    # Define vLLM installation target
+    VLLM_TARGET="vllm"
+    if [ "$PT_CU_VERSION" == "cu130" ] && [ "$ARCH" == "aarch64" ]; then
+        echo ">>> Using optimized vLLM cu130 wheel for aarch64..."
+        VLLM_TARGET="https://github.com/vllm-project/vllm/releases/download/v0.19.1/vllm-0.19.1+cu130-cp38-abi3-manylinux_2_35_aarch64.whl"
+    fi
+
+    # Install core ML libraries + workshop tools in one go using the dynamically selected index.
+    # This ensures consistent dependency resolution (e.g., ensuring vLLM gets the CUDA 
+    # version of Torch instead of falling back to the CPU version on PyPI).
     uv pip install -U \
         --python "$VENV_PYTHON" \
         --extra-index-url "https://download.pytorch.org/whl/${PT_CU_VERSION}" \
+        --index-strategy unsafe-best-match \
         "torch" \
         "torchvision" \
+        "torchaudio" \
         "transformers" \
         "trl" \
         "peft" \
@@ -241,7 +248,9 @@ elif [ "$HAS_NVIDIA_GPU" = true ]; then
         "bitsandbytes" \
         "datasets" \
         "evaluate" \
-        "google-tunix>=0.1.6"
+        "google-tunix>=0.1.6" \
+        "$VLLM_TARGET" \
+        "autoawq"             # required to load the Qwen-AWQ judge model
 
     # Install JAX with the correct CUDA flavour.
     echo ">>> Installing JAX with CUDA support (${JAX_CUDA_TAG})..."
@@ -249,15 +258,6 @@ elif [ "$HAS_NVIDIA_GPU" = true ]; then
         --python "$VENV_PYTHON" \
         -f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html" \
         "jax[${JAX_CUDA_TAG}]"
-
-    echo ">>> Installing Linux/GPU workshop tools (vllm, autoawq)..."
-    # Use the stable vLLM release rather than the nightly index which can
-    # introduce incompatibilities mid-workshop.
-    uv pip install -U \
-        --python "$VENV_PYTHON" \
-        --index-strategy unsafe-best-match \
-        "vllm" \
-        "autoawq"             # required to load the Qwen-AWQ judge model
 
 else
     echo ">>> Installing standard Linux (CPU only) stack..."
